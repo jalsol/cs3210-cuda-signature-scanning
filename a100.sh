@@ -26,7 +26,7 @@ echo "NVCC info: $($NVCC --version)"
 
 echo -e "\n====> Compiling... (REMEMBER TO CHECK MAKE OUTPUT)\n"
 
-# make
+make
 
 echo -e "\n====> Running...\n"
 
