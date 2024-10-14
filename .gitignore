@@ -3,4 +3,4 @@ gen_sig
 matcher
 *.fastq
 *.fasta
-
+log/
