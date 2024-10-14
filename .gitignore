@@ -1,6 +1,6 @@
 gen_sample
 gen_sig
-matcher
+matcher*
 *.fastq
 *.fasta
 log/
