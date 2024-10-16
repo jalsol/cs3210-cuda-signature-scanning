@@ -6,7 +6,7 @@
 #SBATCH --mem=20G
 #SBATCH --gpus=a100-40:1
 #SBATCH --constraint=xgph
-#SBATCH --time=00:01:00
+#SBATCH --time=01:00:00
 #SBATCH --output=log/%x-%j.slurmlog
 #SBATCH --error=log/%x-%j.slurmlog
 
