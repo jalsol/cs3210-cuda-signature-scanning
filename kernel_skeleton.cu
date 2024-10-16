@@ -30,7 +30,8 @@ double calc_score(std::string_view quality, int start, int size) {
 
 // ===================================================================================
 
-constexpr int MAX_BUFFER = 200000;
+constexpr int MAX_SAMPLE_LEN = 200000;
+constexpr int MAX_SIGNATURE_LEN = 10000;
 constexpr int NUM_THREADS = 1024;
 
 char* sig_buffer;
@@ -86,7 +87,7 @@ __global__ void test_match(
 }
 
 int find_match(const int samp_size, const int sig_size) {
-	int answer = MAX_BUFFER;
+	int answer = MAX_SAMPLE_LEN;
 	CHECK_CUDA_ERROR(cudaMemcpyToSymbol(device_answer, &answer, sizeof(answer)));
 
 	const int num_windows = samp_size - sig_size + 1;
@@ -99,8 +100,8 @@ int find_match(const int samp_size, const int sig_size) {
 }
 
 void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klibpp::KSeq>& signatures, std::vector<MatchResult>& matches) {
-	CHECK_CUDA_ERROR(cudaMalloc(&samp_buffer, MAX_BUFFER));
-	CHECK_CUDA_ERROR(cudaMalloc(&sig_buffer, MAX_BUFFER));
+	CHECK_CUDA_ERROR(cudaMalloc(&samp_buffer, MAX_SAMPLE_LEN));
+	CHECK_CUDA_ERROR(cudaMalloc(&sig_buffer, MAX_SIGNATURE_LEN));
 
 	for (const auto& samp : samples) {
 		const int samp_size = std::ssize(samp.seq);
@@ -111,7 +112,7 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 			CHECK_CUDA_ERROR(cudaMemcpy(sig_buffer, sig.seq.data(), sig_size, cudaMemcpyHostToDevice));
 
 			const auto match_pos = find_match(samp_size, sig_size);
-			if (match_pos != MAX_BUFFER) {
+			if (match_pos != MAX_SAMPLE_LEN) {
 				const auto match_score = calc_score(samp.qual, match_pos, std::ssize(sig.seq));
 				matches.push_back({ samp.name, sig.name, match_score });
 			}
