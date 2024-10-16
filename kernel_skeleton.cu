@@ -32,7 +32,7 @@ double calc_score(std::string_view quality, int start, int size) {
 
 constexpr int MAX_SAMPLE_LEN = 200000;
 constexpr int MAX_SIGNATURE_LEN = 10000;
-constexpr int NUM_THREADS = 1024;
+constexpr int NUM_THREADS = 32; // 1 block = 1 warp
 
 char* sig_buffer;
 char* samp_buffer;
@@ -49,8 +49,6 @@ __global__ void test_match(
 	const int sig_size,
 	const int piece_size
 ) {
-	__shared__ bool piece_match[NUM_THREADS];
-
 	const int offset = blockIdx.x; // for now blockDim.x == 1?
 	if (offset + sig_size > samp_size) return;
 
@@ -64,25 +62,18 @@ __global__ void test_match(
 	bool match = true;
 	for (int i = piece_start; i < piece_end; ++i) {
 		if (offset + i < samp_size) {
-			match = match &&
-				(sig_buffer[i] == samp_buffer[offset + i])
-				|| (sig_buffer[i] == 'N')
-				|| (samp_buffer[offset + i] == 'N');
+			const char samp_char = samp_buffer[offset + i];
+			const char sig_char = sig_buffer[i];
+			match = match && (sig_char == samp_char || sig_char == 'N' || samp_char == 'N');
 		}
 	}
 
-	piece_match[threadIdx.x] = match;
+	// note to self: NUM_THREADS == 32
+	// thus 1 block = 1 warp
+    const bool all_match = __all_sync(0xFFFFFFFF, match);
 
-	__syncthreads();
-
-	if (tid == 0) {
-		bool complete_match = true;
-		for (int i = 0; i < NUM_THREADS; ++i)
-			complete_match = complete_match && piece_match[i];
-
-		if (complete_match) {
-			atomicMin(&device_answer, offset);
-		}
+	if (tid == 0 && all_match) {
+		atomicMin(&device_answer, offset);
 	}
 }
 
