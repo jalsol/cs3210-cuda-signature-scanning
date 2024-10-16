@@ -60,11 +60,22 @@ __global__ void test_match(
 	// can't go wrong unless division goes wrong
 
 	bool match = true;
-	for (int i = piece_start; i < piece_end; ++i) {
-		if (offset + i < samp_size) {
-			const char samp_char = samp_buffer[offset + i];
-			const char sig_char = sig_buffer[i];
-			match = match && (sig_char == samp_char || sig_char == 'N' || samp_char == 'N');
+
+	if (offset & 1) {
+		for (int i = piece_end - 1; i >= piece_start; --i) {
+			if (offset + i < samp_size) {
+				const char samp_char = samp_buffer[offset + i];
+				const char sig_char = sig_buffer[i];
+				match = match && (sig_char == samp_char || sig_char == 'N' || samp_char == 'N');
+			}
+		}
+	} else {
+		for (int i = piece_start; i < piece_end; ++i) {
+			if (offset + i < samp_size) {
+				const char samp_char = samp_buffer[offset + i];
+				const char sig_char = sig_buffer[i];
+				match = match && (sig_char == samp_char || sig_char == 'N' || samp_char == 'N');
+			}
 		}
 	}
 
