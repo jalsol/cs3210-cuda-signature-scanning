@@ -38,8 +38,8 @@ char* sig_buffer;
 char* samp_buffer;
 __device__ int device_answer;
 
-__device__ int dmin(int a, int b) {
-    return (a < b) ? a : b;
+__device__ int min3(int a, int b, int c) {
+    return min(a, min(b, c));
 }
 
 __global__ void test_match(
@@ -50,40 +50,26 @@ __global__ void test_match(
 	const int piece_size
 ) {
 	const int offset = blockIdx.x; // for now blockDim.x == 1?
-	if (offset + sig_size > samp_size) return;
 
-	const int tid = threadIdx.x;
-	const int piece_start = tid * piece_size;
-	const int piece_end = dmin(piece_start + piece_size, sig_size);
+	const int piece_start = threadIdx.x * piece_size;
+	const int piece_end = min3(piece_start + piece_size, sig_size, samp_size - offset);
 
 	// shall we assert(piece_start < sig_size)?
 	// can't go wrong unless division goes wrong
 
 	bool match = true;
 
-	if (offset & 1) {
-		for (int i = piece_end - 1; i >= piece_start; --i) {
-			if (offset + i < samp_size) {
-				const char samp_char = samp_buffer[offset + i];
-				const char sig_char = sig_buffer[i];
-				match = match && (sig_char == samp_char || sig_char == 'N' || samp_char == 'N');
-			}
-		}
-	} else {
-		for (int i = piece_start; i < piece_end; ++i) {
-			if (offset + i < samp_size) {
-				const char samp_char = samp_buffer[offset + i];
-				const char sig_char = sig_buffer[i];
-				match = match && (sig_char == samp_char || sig_char == 'N' || samp_char == 'N');
-			}
-		}
+	for (int i = piece_start; i < piece_end; ++i) {
+		const char samp_char = samp_buffer[offset + i];
+		const char sig_char = sig_buffer[i];
+		match = match && (sig_char == samp_char || sig_char == 'N' || samp_char == 'N');
 	}
 
 	// note to self: NUM_THREADS == 32
 	// thus 1 block = 1 warp
     const bool all_match = __all_sync(0xFFFFFFFF, match);
 
-	if (tid == 0 && all_match) {
+	if (threadIdx.x == 0 && all_match) {
 		atomicMin(&device_answer, offset);
 	}
 }
