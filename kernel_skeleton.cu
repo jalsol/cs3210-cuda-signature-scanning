@@ -32,8 +32,27 @@ struct View {
 	int len;
 };
 
+__device__ int device_answer;
+
 __device__ int min3(int a, int b, int c) {
     return min(a, min(b, c));
+}
+
+__global__ void calc_score(
+	const char* const __restrict__ qual_buffer,
+	const int len,
+	double* const __restrict__ output
+) {
+	const int start = device_answer;
+	if (start == INF) return;
+
+	int sum = 0;
+
+	for (int i = start; i < start + len; ++i) {
+		sum += qual_buffer[i] - 33;
+	}
+
+	*output = static_cast<double>(sum) / len;
 }
 
 __global__ void test_match(
@@ -41,9 +60,15 @@ __global__ void test_match(
 	const View samp_view,
 	const char* const __restrict__ sign_buffer,
 	const View sign_view,
-	const int piece_size,
-	int* const answer
+	const char* const __restrict__ qual_buffer,
+	double* const __restrict__ score_buffer,
+	const int pair_idx,
+	const int piece_size
 ) {
+	if (blockIdx.x == 0 && threadIdx.x == 0) {
+		device_answer = INF;
+	}
+
 	const int window_start = samp_view.start + blockIdx.x;
 	const int window_end   = window_start + sign_view.len;
 
@@ -66,35 +91,41 @@ __global__ void test_match(
     const bool all_match = __all_sync(0xFFFFFFFF, match);
 
 	if (threadIdx.x == 0 && all_match) {
-		atomicMin(answer, window_start);
+		atomicMin(&device_answer, window_start);
 	}
 }
 
-int find_match(
+void find_match(
 	const char* const __restrict__ samp_buffer,
 	const View samp_view,
 	const char* const __restrict__ sign_buffer,
 	const View sign_view,
-	int* const answer
+	const char* const __restrict__ qual_buffer,
+	double* const __restrict__ score_buffer,
+	const int pair_idx
 ) {
-	*answer = INF;
-
 	const int num_windows = samp_view.len - sign_view.len + 1;
 	const int piece_size = (sign_view.len + NUM_THREADS - 1) / NUM_THREADS;
 
-	test_match<<<num_windows, NUM_THREADS>>>(samp_buffer, samp_view, sign_buffer, sign_view, piece_size, answer);
-	CHECK_CUDA_ERROR(cudaDeviceSynchronize());
-	return *answer;
+	test_match<<<num_windows, NUM_THREADS>>>(
+		samp_buffer,
+		samp_view,
+		sign_buffer,
+		sign_view,
+		qual_buffer,
+		score_buffer,
+		pair_idx,
+		piece_size
+	);
+
+	calc_score<<<1, 1>>>(qual_buffer, sign_view.len, score_buffer + pair_idx);
 }
 
-__global__ void calc_score(const char* const __restrict__ qual_buffer, const int start, const int len, double* const output) {
-	int sum = 0;
-
-	for (int i = start; i < start + len; ++i) {
-		sum += qual_buffer[i] - 33;
-	}
-
-	*output = static_cast<double>(sum) / len;
+__global__ void init_array(double* const __restrict__ array, const int size) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        array[idx] = -1.0;
+    }
 }
 
 void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klibpp::KSeq>& signatures, std::vector<MatchResult>& matches) {
@@ -137,24 +168,44 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 	std::free(host_qual_buffer);
 	std::free(host_sign_buffer);
 
-	double* match_score;
-	int* match_pos;
-	CHECK_CUDA_ERROR(cudaMallocManaged(&match_score, sizeof(double)));
-	CHECK_CUDA_ERROR(cudaMallocManaged(&match_pos,   sizeof(int)));
+	const auto num_pairs = samples.size() * signatures.size();
+	double* score_buffer;
+	CHECK_CUDA_ERROR(cudaMalloc(&score_buffer, sizeof(double) * num_pairs));
 
-	samp_start = 0;
-	for (const auto& samp : samples) {
+	init_array<<<(num_pairs + 255) / 256, 256>>>(score_buffer, num_pairs);
+
+	for (int i = 0, samp_start = 0; i < samples.size(); ++i) {
+		const auto& samp = samples[i];
 		const View samp_view = { samp_start, static_cast<int>(samp.seq.size()) };
-		sign_start = 0;
 
-		for (const auto& sign : signatures) {
+		for (int j = 0, sign_start = 0; j < signatures.size(); ++j) {
+			const auto& sign = signatures[j];
 			const View sign_view = { sign_start, static_cast<int>(sign.seq.size()) };
-			find_match(samp_buffer, samp_view, sign_buffer, sign_view, match_pos);
+			const int pair_idx = i * signatures.size() + j;
 
-			if (*match_pos != INF) {
-				calc_score<<<1, 1>>>(qual_buffer, *match_pos, sign_view.len, match_score);
-				CHECK_CUDA_ERROR(cudaDeviceSynchronize());
-				matches.push_back({ samp.name, sign.name, *match_score });
+			find_match(samp_buffer, samp_view, sign_buffer, sign_view, qual_buffer, score_buffer, pair_idx);
+
+			sign_start += sign_view.len;
+		}
+
+		samp_start += samp_view.len;
+	}
+
+	auto* result = reinterpret_cast<double*>(std::malloc(sizeof(double) * num_pairs));
+	CHECK_CUDA_ERROR(cudaMemcpy(result, score_buffer, sizeof(double) * num_pairs, cudaMemcpyDeviceToHost));
+	CHECK_CUDA_ERROR(cudaFree(score_buffer));
+
+	for (int i = 0, samp_start = 0; i < samples.size(); ++i) {
+		const auto& samp = samples[i];
+		const View samp_view = { samp_start, static_cast<int>(samp.seq.size()) };
+
+		for (int j = 0, sign_start = 0; j < signatures.size(); ++j) {
+			const auto& sign = signatures[j];
+			const View sign_view = { sign_start, static_cast<int>(sign.seq.size()) };
+			const int pair_idx = i * signatures.size() + j;
+
+			if (result[pair_idx] != -1.0) {
+				matches.push_back({ samp.name, sign.name, result[pair_idx] });
 			}
 
 			sign_start += sign_view.len;
@@ -163,8 +214,6 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 		samp_start += samp_view.len;
 	}
 
-	CHECK_CUDA_ERROR(cudaFree(match_score));
-	CHECK_CUDA_ERROR(cudaFree(match_pos));
 
 	CHECK_CUDA_ERROR(cudaFree(samp_buffer));
 	CHECK_CUDA_ERROR(cudaFree(qual_buffer));
