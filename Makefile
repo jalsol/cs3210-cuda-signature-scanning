@@ -8,7 +8,7 @@ CXXFLAGS := -std=c++20 -O3
 
 OUTPUT_GEN  := gen_sample
 OUTPUT_GEN_SIG  := gen_sig
-OUTPUT_GPU  := matcher_opt4
+OUTPUT_GPU  := matcher_opt5
 
 .DEFAULT_TARGET: all
 
