@@ -75,27 +75,31 @@ __global__ void find_match(
 }
 
 void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klibpp::KSeq>& signatures, std::vector<MatchResult>& matches) {
-	char* host_samp_buffer;
-	char* host_qual_buffer;
 	char* host_sign_buffer;
-	int*  host_pref_samp;
 	int*  host_pref_sign;
 
-	CHECK_CUDA_ERROR(cudaMallocHost(&host_samp_buffer, MAX_SAMP_LEN * NUM_SAMPS));
-	CHECK_CUDA_ERROR(cudaMallocHost(&host_qual_buffer, MAX_SAMP_LEN * NUM_SAMPS));
 	CHECK_CUDA_ERROR(cudaMallocHost(&host_sign_buffer, MAX_SIGN_LEN * NUM_SIGNS));
-	CHECK_CUDA_ERROR(cudaMallocHost(&host_pref_samp,   sizeof(int) * (samples.size()    + 1)));
-	CHECK_CUDA_ERROR(cudaMallocHost(&host_pref_sign,   sizeof(int) * (signatures.size() + 1)));
+	CHECK_CUDA_ERROR(cudaMallocHost(&host_pref_sign,    sizeof(int) * (signatures.size() + 1)));
 
-	host_pref_samp[0] = host_pref_sign[0] = 0;
+	char* samp_buffer;
+	char* qual_buffer;
+	int*  pref_samp;
+
+	CHECK_CUDA_ERROR(cudaMallocManaged(&samp_buffer, MAX_SAMP_LEN * NUM_SAMPS));
+	CHECK_CUDA_ERROR(cudaMallocManaged(&qual_buffer, MAX_SAMP_LEN * NUM_SAMPS));
+	CHECK_CUDA_ERROR(cudaMallocManaged(&pref_samp,   sizeof(int)  * (samples.size() + 1)));
+
+	pref_samp[0] = 0;
+	host_pref_sign[0] = 0;
 
 	for (int i = 1; i <= samples.size(); ++i) {
 		const auto& samp = samples[i - 1];
 		const auto len   = samp.seq.size();
+		const auto prev  = pref_samp[i - 1];
 
-		cudaMemcpy(host_samp_buffer + host_pref_samp[i - 1], samp.seq.data(),  len, cudaMemcpyDefault);
-		cudaMemcpy(host_qual_buffer + host_pref_samp[i - 1], samp.qual.data(), len, cudaMemcpyDefault);
-		host_pref_samp[i] = host_pref_samp[i - 1] + len;
+		cudaMemcpy(samp_buffer + prev, samp.seq.data(),  len, cudaMemcpyDefault);
+		cudaMemcpy(qual_buffer + prev, samp.qual.data(), len, cudaMemcpyDefault);
+		pref_samp[i] = prev + len;
 	}
 
 	for (int i = 1; i <= signatures.size(); ++i) {
@@ -106,35 +110,22 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 		host_pref_sign[i] = host_pref_sign[i - 1] + len;
 	}
 
-	char*   samp_buffer;
-	char*   qual_buffer;
 	char*   sign_buffer;
-	int*    pref_samp;
 	int*    pref_sign;
 	double* score_buffer;
 
-	const auto num_pairs  = samples.size() * signatures.size();
-	const auto total_samp_len = host_pref_samp[samples.size()];
+	const auto num_pairs      = samples.size() * signatures.size();
 	const auto total_sign_len = host_pref_sign[signatures.size()];
 
-	CHECK_CUDA_ERROR(cudaMalloc(&samp_buffer,  total_samp_len));
-	CHECK_CUDA_ERROR(cudaMalloc(&qual_buffer,  total_samp_len));
 	CHECK_CUDA_ERROR(cudaMalloc(&sign_buffer,  total_sign_len));
-	CHECK_CUDA_ERROR(cudaMalloc(&pref_samp,    sizeof(int) * (samples.size()    + 1)));
 	CHECK_CUDA_ERROR(cudaMalloc(&pref_sign,    sizeof(int) * (signatures.size() + 1)));
 	CHECK_CUDA_ERROR(cudaMalloc(&score_buffer, sizeof(double) * num_pairs));
 
-	CHECK_CUDA_ERROR(cudaMemcpy(samp_buffer, host_samp_buffer, total_samp_len, cudaMemcpyHostToDevice));
-	CHECK_CUDA_ERROR(cudaMemcpy(qual_buffer, host_qual_buffer, total_samp_len, cudaMemcpyHostToDevice));
-	CHECK_CUDA_ERROR(cudaMemcpy(sign_buffer, host_sign_buffer, total_sign_len, cudaMemcpyHostToDevice));
-	CHECK_CUDA_ERROR(cudaMemcpy(pref_samp,   host_pref_samp,   sizeof(int) * (samples.size()    + 1), cudaMemcpyHostToDevice));
+	CHECK_CUDA_ERROR(cudaMemcpy(sign_buffer, host_sign_buffer, total_sign_len,                        cudaMemcpyHostToDevice));
 	CHECK_CUDA_ERROR(cudaMemcpy(pref_sign,   host_pref_sign,   sizeof(int) * (signatures.size() + 1), cudaMemcpyHostToDevice));
 	init_array<<<(num_pairs + 255) / 256, 256>>>(score_buffer, num_pairs);
 
-	CHECK_CUDA_ERROR(cudaFreeHost(host_samp_buffer));
-	CHECK_CUDA_ERROR(cudaFreeHost(host_qual_buffer));
 	CHECK_CUDA_ERROR(cudaFreeHost(host_sign_buffer));
-	CHECK_CUDA_ERROR(cudaFreeHost(host_pref_samp));
 	CHECK_CUDA_ERROR(cudaFreeHost(host_pref_sign));
 
 	const dim3 grid_size(samples.size(), signatures.size());
