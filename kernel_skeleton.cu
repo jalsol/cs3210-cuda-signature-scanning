@@ -25,7 +25,7 @@ constexpr int MAX_SIGN_LEN = 10'000;
 constexpr int NUM_SAMPS = 2200;
 constexpr int NUM_SIGNS = 1000;
 // constexpr int INF = MAX_SAMP_LEN * NUM_SAMPS;
-// constexpr int NUM_THREADS = 32;
+constexpr int NUM_THREADS = 32;
 
 struct View {
 	int start;
@@ -41,11 +41,16 @@ __global__ void find_match(
 	const char* const __restrict__ qual_buffer,
 	const int*  const __restrict__ pref_samp,
 	const int*  const __restrict__ pref_sign,
-	double*     const __restrict__ score_buffer
+	double*     const __restrict__ score_buffer,
+	const int num_samps,
+	const int num_signs
 ) {
-	const int samp_idx = blockIdx.x;
-	const int sign_idx = blockIdx.y;
-	const int pair_idx = samp_idx * gridDim.y + sign_idx;
+	const int samp_idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const int sign_idx = blockIdx.y * blockDim.y + threadIdx.y;
+
+	if (samp_idx >= num_samps || sign_idx >= num_signs) return;
+
+	const int pair_idx = samp_idx * num_signs + sign_idx;
 
 	const int samp_start = pref_samp[samp_idx];
 	const int samp_next  = pref_samp[samp_idx + 1];
@@ -94,8 +99,8 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 
 	for (int i = 1; i <= samples.size(); ++i) {
 		const auto& samp = samples[i - 1];
-		const auto len   = samp.seq.size();
-		const auto prev  = pref_samp[i - 1];
+		const auto  len  = samp.seq.size();
+		const auto  prev = pref_samp[i - 1];
 
 		cudaMemcpy(samp_buffer + prev, samp.seq.data(),  len, cudaMemcpyDefault);
 		cudaMemcpy(qual_buffer + prev, samp.qual.data(), len, cudaMemcpyDefault);
@@ -104,7 +109,7 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 
 	for (int i = 1; i <= signatures.size(); ++i) {
 		const auto& sign = signatures[i - 1];
-		const auto len   = sign.seq.size();
+		const auto  len  = sign.seq.size();
 
 		cudaMemcpy(host_sign_buffer + host_pref_sign[i - 1], sign.seq.data(), len, cudaMemcpyDefault);
 		host_pref_sign[i] = host_pref_sign[i - 1] + len;
@@ -128,14 +133,19 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 	CHECK_CUDA_ERROR(cudaFreeHost(host_sign_buffer));
 	CHECK_CUDA_ERROR(cudaFreeHost(host_pref_sign));
 
-	const dim3 grid_size(samples.size(), signatures.size());
-	find_match<<<grid_size, 1>>>(
+	const dim3 grid_size(
+		(samples.size()    + NUM_THREADS - 1) / NUM_THREADS,
+		(signatures.size() + NUM_THREADS - 1) / NUM_THREADS
+	);
+	find_match<<<grid_size, dim3(NUM_THREADS, NUM_THREADS)>>>(
 		samp_buffer,
 		sign_buffer,
 		qual_buffer,
 		pref_samp,
 		pref_sign,
-		score_buffer
+		score_buffer,
+		samples.size(),
+		signatures.size()
 	);
 
 	double* result;
