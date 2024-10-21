@@ -8,11 +8,11 @@ CXXFLAGS := -std=c++20 -O3
 
 OUTPUT_GEN  := gen_sample
 OUTPUT_GEN_SIG  := gen_sig
-OUTPUT_GPU  := matcher_opt5
+OUTPUT_GPU  := matcher_opt6
 
 .DEFAULT_TARGET: all
 
-all: $(OUTPUT_GEN) $(OUTPUT_GEN_SIG) $(OUTPUT_GPU)
+all: $(OUTPUT_GPU)
 
 $(OUTPUT_GPU): kernel_skeleton.cu $(COMMON_SRCS)
 	$(NVCC) $(CXXFLAGS) -lineinfo -dlto -arch=native -o $@ $^
@@ -24,4 +24,4 @@ $(OUTPUT_GEN_SIG): gen_sig.cc
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 clean:
-	rm -f $(OUTPUT_GEN) $(OUTPUT_GEN_SIG) $(OUTPUT_GPU)
+	rm -f $(OUTPUT_GPU)
