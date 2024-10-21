@@ -60,7 +60,7 @@ __global__ void find_match(
 	const View samp_view { samp_start, samp_next - samp_start };
 	const View sign_view { sign_start, sign_next - sign_start };
 
-	for (int offset = 0; offset + sign_view.len < samp_view.len; ++offset) {
+	for (int offset = 0; offset + sign_view.len <= samp_view.len; ++offset) {
 		int ptr = 0;
 
 		for (; ptr < sign_view.len; ++ptr) {
